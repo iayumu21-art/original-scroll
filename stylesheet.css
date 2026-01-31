@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Kodo to Doshisha Univ - 1st Period Rush</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --safe-top: env(safe-area-inset-top);
+            --safe-bottom: env(safe-area-inset-bottom);
+        }
+        body {
+            background-color: #0c4a6e;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            height: -webkit-fill-available;
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        canvas {
+            background: #bae6fd;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            touch-action: none;
+            cursor: pointer;
+            max-width: 100%;
+            max-height: 100%;
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            pointer-events: none;
+            z-index: 20;
+            padding: calc(10px + var(--safe-top)) 20px;
+        }
+        .controls {
+            position: absolute;
+            bottom: calc(20px + var(--safe-bottom));
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(8px);
+            padding: 12px 24px;
+            border-radius: 20px;
+            text-align: center;
+            width: auto;
+            min-width: 250px;
+            border: 1px solid rgba(255,255,255,0.3);
+            transition: all 0.3s ease;
+            pointer-events: auto;
+            z-index: 30;
+        }
+        .hidden-ui {
+            opacity: 0;
+            transform: translate(-50%, 50px);
+            pointer-events: none;
+        }
+        #cut-in-overlay {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            width: 100%;
+            height: 80px;
+            background: #ef4444;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            transform: translateY(-50%) skewX(-20deg);
+            border-top: 4px solid white;
+            border-bottom: 4px solid white;
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.8);
+        }
+        #cut-in-text {
+            color: white;
+            font-size: 28px;
+            font-weight: 900;
+            font-style: italic;
+            text-shadow: 3px 3px 0 #000;
+            transform: skewX(20deg);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="cut-in-overlay">
+            <div id="cut-in-text">1限に間に合わない！</div>
+        </div>
+
+        <div class="ui-overlay flex justify-between items-start pointer-events-none">
+            <div id="levelDisplay" class="bg-white/90 backdrop-blur px-4 py-1 rounded-full text-xs sm:text-sm font-bold text-sky-700 shadow-lg border border-sky-200">LEVEL 1: 通学路</div>
+            <div id="scoreDisplay" class="bg-white/90 backdrop-blur px-4 py-1 rounded-full text-xs sm:text-sm font-mono text-orange-600 shadow-lg border border-orange-200">SCORE: 0</div>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+
+        <div id="uiPanel" class="controls">
+            <div id="upload-section">
+                <input type="file" id="imageInput" accept="image/*" class="hidden">
+                <button onclick="document.getElementById('imageInput').click()" 
+                        class="bg-orange-500 hover:bg-orange-400 text-white font-bold py-2 px-6 rounded-full transition duration-300 shadow-lg text-sm border-b-4 border-orange-700 active:border-b-0 active:translate-y-1">
+                    キャラを選んで登校開始！
+                </button>
+            </div>
+            <p id="status" class="text-[10px] text-sky-900 font-bold mt-1 opacity-80">長押しで高ジャンプ / 横画面プレイ推奨</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const imageInput = document.getElementById('imageInput');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const levelDisplay = document.getElementById('levelDisplay');
+        const uiPanel = document.getElementById('uiPanel');
+        const cutInOverlay = document.getElementById('cut-in-overlay');
+
+        // --- Audio System ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+            if (type === 'jump') {
+                osc.type = 'triangle'; osc.frequency.setValueAtTime(300, now);
+                osc.frequency.exponentialRampToValueAtTime(800, now + 0.05);
+                gain.gain.setValueAtTime(0.15, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                osc.start(); osc.stop(now + 0.05);
+            } else if (type === 'coin') {
+                osc.type = 'sine'; osc.frequency.setValueAtTime(800, now);
+                osc.frequency.exponentialRampToValueAtTime(1200, now + 0.05);
+                gain.gain.setValueAtTime(0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+                osc.start(); osc.stop(now + 0.15);
+            } else if (type === 'bonus') {
+                osc.type = 'sine'; osc.frequency.setValueAtTime(1200, now);
+                osc.frequency.exponentialRampToValueAtTime(2400, now + 0.1);
+                gain.gain.setValueAtTime(0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(); osc.stop(now + 0.3);
+            } else if (type === 'gameover') {
+                osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now);
+                osc.frequency.linearRampToValueAtTime(40, now + 0.4);
+                gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.4);
+                osc.start(); osc.stop(now + 0.4);
+            } else if (type === 'cutin') {
+                osc.type = 'square'; osc.frequency.setValueAtTime(200, now);
+                osc.frequency.linearRampToValueAtTime(400, now + 0.1);
+                gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+                osc.start(); osc.stop(now + 0.3);
+            }
+        }
+
+        // --- Constants ---
+        const GRAVITY = 1.1;             
+        const INITIAL_JUMP = -13;        
+        const JUMP_SUSTAIN = -1.0;       
+        const MAX_JUMP_TIME = 12;        
+        const GROUND_RATIO = 0.2; 
+        let PLAYER_SIZE = 80;
+        const MAX_SLOPE_ANGLE = -0.22;   
+        const LEVEL_GOAL_SCORE = 6000;   
+        const SLOPE_START_SCORE = 1200; 
+        const BASE_SCROLL_RATIO = 0.012; 
+
+        // State
+        let player = { x: 100, y: 0, vy: 0, width: 80, height: 80, img: null, bobbing: 0, scaleY: 1, isJumping: false, jumpCounter: 0 };
+        let isPressing = false;
+        let currentLevel = 1;
+        let enemies = [], coins = [], backgroundItems = [], decos = [], particles = [];
+        let goalItem = null;
+        let frameCount = 0;
+        let score = 0;
+        let totalCoinsSpawned = 0, totalCoinsCollected = 0;
+        let finalScore = 0;
+        let gameState = 'WAITING';
+        let cameraOffset = 0;
+        let nextSpawnTime = 0;
+        let resultTimer = 0;
+        let currentSlopeAngle = 0;
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            PLAYER_SIZE = Math.min(canvas.width, canvas.height) * 0.16;
+            player.width = PLAYER_SIZE;
+            player.height = PLAYER_SIZE;
+            player.x = canvas.width * 0.15;
+            initBackground();
+            if (gameState === 'WAITING') player.y = getGroundY(player.x) - player.height;
+        }
+
+        function initBackground() {
+            backgroundItems = [];
+            for(let i=0; i<8; i++) {
+                backgroundItems.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * (canvas.height * 0.4),
+                    w: Math.random() * 120 + 80,
+                    h: Math.random() * 50 + 30,
+                    speed: Math.random() * 0.3 + 0.1
+                });
+            }
+            decos = [{x: 0}, {x: canvas.width * 0.5}, {x: canvas.width * 1.0}, {x: canvas.width * 1.5}];
+        }
+
+        window.addEventListener('resize', resize);
+        window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+        resize();
+
+        function updateSlope() {
+            if (currentLevel === 1 || score < SLOPE_START_SCORE) {
+                currentSlopeAngle += (0 - currentSlopeAngle) * 0.05;
+            } else {
+                const target = MAX_SLOPE_ANGLE * Math.min((score - SLOPE_START_SCORE) / 2500, 1);
+                currentSlopeAngle += (target - currentSlopeAngle) * 0.05;
+            }
+        }
+
+        function getGroundY(x) {
+            const baseLine = canvas.height - (canvas.height * GROUND_RATIO);
+            if (currentSlopeAngle === 0) return baseLine;
+            return baseLine - (canvas.width - x) * Math.tan(currentSlopeAngle);
+        }
+
+        imageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => { player.img = img; triggerStartSequence(); };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function triggerStartSequence() {
+            uiPanel.classList.add('hidden-ui');
+            cutInOverlay.style.display = 'flex';
+            playSound('cutin');
+            setTimeout(() => { cutInOverlay.style.display = 'none'; startGame(); }, 1200);
+        }
+
+        function startGame() {
+            gameState = 'PLAYING'; 
+            uiPanel.classList.add('hidden-ui'); 
+            score = 0; enemies = []; coins = []; particles = [];
+            goalItem = null; frameCount = 0; nextSpawnTime = 0; cameraOffset = 0;
+            totalCoinsSpawned = 0; totalCoinsCollected = 0;
+            currentSlopeAngle = 0;
+            player.y = getGroundY(player.x) - player.height;
+            player.vy = 0; player.isJumping = false;
+            resultTimer = 0;
+            updateLevelUI();
+        }
+
+        function updateLevelUI() {
+            levelDisplay.textContent = currentLevel === 1 ? "LEVEL 1: 通学路" : "LEVEL 2: キャンパス";
+        }
+
+        const onPress = (e) => {
+            if (e && e.type === 'keydown' && e.code !== 'Space') return;
+            if (e && e.cancelable) e.preventDefault();
+            isPressing = true;
+            if (gameState === 'GAMEOVER' || gameState === 'CLEARING') {
+                if (resultTimer > 60) {
+                    currentLevel = 1; startGame(); 
+                }
+                return;
+            }
+            if (gameState === 'PLAYING') {
+                const gy = getGroundY(player.x) - player.height;
+                if (player.y >= gy - 15) {
+                    player.vy = INITIAL_JUMP; player.isJumping = true; player.jumpCounter = 0; playSound('jump');
+                }
+            }
+        };
+
+        window.addEventListener('keydown', onPress);
+        window.addEventListener('keyup', () => isPressing = false);
+        canvas.addEventListener('touchstart', onPress, {passive: false});
+        window.addEventListener('touchend', () => isPressing = false);
+        canvas.addEventListener('mousedown', onPress);
+        window.addEventListener('mouseup', () => isPressing = false);
+
+        function spawnParticle(x, y, color) {
+            for(let i=0; i<6; i++) {
+                particles.push({ x, y, vx: (Math.random()-0.5)*8, vy: (Math.random()-0.5)*8, life: 15, color });
+            }
+        }
+
+        function update() {
+            if (gameState === 'GAMEOVER' || gameState === 'CLEARING') {
+                resultTimer++;
+                return;
+            }
+            if (gameState !== 'PLAYING') return;
+
+            frameCount++; score += 2;
+            scoreDisplay.textContent = `SCORE: ${Math.floor(score / 10)}`;
+            const scrollSpeed = (canvas.width * BASE_SCROLL_RATIO) + (score / 4500);
+
+            updateSlope();
+
+            if (currentLevel === 2) {
+                const targetOffset = (canvas.width - player.x) * Math.tan(currentSlopeAngle) * 0.75;
+                cameraOffset += (targetOffset - cameraOffset) * 0.08;
+            }
+
+            if (isPressing && player.isJumping) {
+                if (player.jumpCounter < MAX_JUMP_TIME) { player.vy += JUMP_SUSTAIN; player.jumpCounter++; }
+                else { player.isJumping = false; }
+            }
+
+            player.vy += GRAVITY;
+            player.y += player.vy;
+
+            const gy = getGroundY(player.x) - player.height;
+            if (player.y > gy) {
+                player.y = gy; player.vy = 0; player.isJumping = false;
+                player.bobbing = Math.sin(frameCount * 0.25) * 3;
+            } else {
+                player.scaleY = 1.0 + Math.abs(player.vy) * 0.02;
+            }
+
+            backgroundItems.forEach(c => { c.x -= c.speed; if(c.x + c.w < 0) c.x = canvas.width + 50; });
+            decos.forEach(d => { d.x -= scrollSpeed * 0.85; if(d.x < -300) d.x = canvas.width + 300; });
+
+            if (frameCount % 60 === 0 && !goalItem) {
+                const sx = canvas.width + 100;
+                const isBonus = Math.random() > 0.9;
+                const relY = -70 - Math.random()*60; 
+                coins.push({ x: sx, relY: relY, w: 34, h: 34, type: isBonus?'BONUS':'NORMAL' });
+                totalCoinsSpawned++;
+            }
+
+            for(let i=coins.length-1; i>=0; i--) {
+                let c = coins[i]; c.x -= scrollSpeed;
+                const actualY = getGroundY(c.x) + c.relY;
+                const playerCX = player.x + player.width/2;
+                const playerCY = player.y + player.height/2;
+                const coinCX = c.x + c.w/2;
+                const coinCY = actualY + c.h/2;
+                const dist = Math.sqrt((playerCX - coinCX)**2 + (playerCY - coinCY)**2);
+
+                if (dist < 55) {
+                    score += (c.type === 'BONUS' ? 1000 : 300); totalCoinsCollected++; 
+                    playSound(c.type === 'BONUS' ? 'bonus' : 'coin');
+                    spawnParticle(c.x, actualY, c.type === 'BONUS' ? '#60a5fa' : '#fbbf24');
+                    coins.splice(i, 1); continue;
+                }
+                if (c.x < -100) coins.splice(i, 1);
+            }
+
+            particles.forEach((p, i) => { p.x += p.vx; p.y += p.vy; p.life--; if(p.life<=0) particles.splice(i,1); });
+
+            if (score >= LEVEL_GOAL_SCORE && !goalItem) {
+                goalItem = { x: canvas.width + 300, w: 350, h: 250, type: currentLevel === 1 ? 'STATION' : 'UNIV' };
+            }
+
+            if (goalItem) {
+                goalItem.x -= scrollSpeed * 0.85;
+                if (player.x > goalItem.x + 150) {
+                    if (currentLevel === 1) { currentLevel = 2; startGame(); }
+                    else { 
+                        finalScore = Math.floor(score/10); 
+                        gameState = 'CLEARING'; 
+                        uiPanel.classList.remove('hidden-ui'); 
+                        resultTimer = 0;
+                    }
+                }
+            } else if (frameCount > nextSpawnTime) {
+                const r = Math.random();
+                // ステージ2ではゴミが連なってくる確率
+                if (r > 0.85) {
+                    enemies.push({ x: canvas.width + 100, type: 'BIRD', w: 45, h: 35, speed: scrollSpeed * 1.1, ph: Math.random()*10 });
+                } else if (r > 0.7 && currentLevel === 2) {
+                    enemies.push({ x: canvas.width + 100, type: 'STUDENT', w: 40, h: 70, speed: scrollSpeed * 0.8, ph: Math.random()*10 });
+                } else if (r > 0.5 && currentLevel === 2) {
+                    // ゴミ（TRASH）を連ねて出現
+                    const chainCount = Math.floor(Math.random() * 2) + 2; // 2〜3個
+                    for(let i=0; i<chainCount; i++) {
+                        enemies.push({ x: canvas.width + 100 + (i * 60), type: 'TRASH', w: 35, h: 35, speed: scrollSpeed * 1.2, rot: 0 });
+                    }
+                } else {
+                    const coneH = 40 + Math.random() * 35;
+                    enemies.push({ x: canvas.width + 100, type: 'CONE', w: 40, h: coneH, speed: scrollSpeed });
+                }
+                nextSpawnTime = frameCount + 60 + Math.random() * 50;
+            }
+
+            for(let i=enemies.length-1; i>=0; i--) {
+                let e = enemies[i]; e.x -= e.speed;
+                let ey;
+                if (e.type === 'BIRD') ey = getGroundY(e.x) - 180 + Math.sin(frameCount * 0.15 + e.ph) * 35;
+                else if (e.type === 'STUDENT') ey = getGroundY(e.x) - e.h + Math.abs(Math.sin(frameCount * 0.2 + e.ph)) * 10;
+                else { ey = getGroundY(e.x) - e.h; if(e.type === 'TRASH') e.rot += 0.3; }
+
+                const pInset = 25;
+                if (player.x + pInset < e.x + e.w && player.x + player.width - pInset > e.x && player.y + pInset < ey + e.h && player.y + player.height - pInset > ey) {
+                    gameState = 'GAMEOVER'; 
+                    playSound('gameover'); 
+                    uiPanel.classList.remove('hidden-ui');
+                    resultTimer = 0;
+                }
+                if (e.x < -500) enemies.splice(i, 1);
+            }
+        }
+
+        function drawCoin(x, y, size, type) {
+            const colorMain = type === 'BONUS' ? '#60a5fa' : '#fbbf24';
+            const colorDark = type === 'BONUS' ? '#2563eb' : '#d97706';
+            ctx.save(); ctx.translate(x, y);
+            ctx.fillStyle = colorDark; ctx.beginPath(); ctx.arc(0, 0, size/2, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = colorMain; ctx.beginPath(); ctx.arc(0, 0, size/2 - 3, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = colorDark; ctx.font = `bold ${size * 0.6}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('¥', 0, 1);
+            ctx.restore();
+        }
+
+        function draw() {
+            const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            sky.addColorStop(0, '#0ea5e9'); sky.addColorStop(0.7, '#fef08a'); sky.addColorStop(1, '#fdba74');
+            ctx.fillStyle = sky; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            backgroundItems.forEach(c => {
+                ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.ellipse(c.x, c.y, c.w/2, c.h/2, 0, 0, Math.PI*2); ctx.fill();
+            });
+
+            ctx.save(); ctx.translate(0, cameraOffset);
+
+            // Ground
+            ctx.fillStyle = currentLevel === 1 ? '#94a3b8' : '#475569';
+            ctx.beginPath(); ctx.moveTo(-100, canvas.height + 500);
+            for(let x = -100; x <= canvas.width + 100; x += 20) ctx.lineTo(x, getGroundY(x));
+            ctx.lineTo(canvas.width + 100, canvas.height + 500); ctx.fill();
+            ctx.strokeStyle = '#334155'; ctx.lineWidth = 3; ctx.stroke();
+
+            decos.forEach(d => {
+                const dy = getGroundY(d.x);
+                if (currentLevel === 1) {
+                    ctx.fillStyle = '#64748b'; ctx.fillRect(d.x, dy-240, 10, 240);
+                    ctx.fillStyle = '#475569'; ctx.fillRect(d.x-10, dy-220, 30, 8);
+                } else {
+                    const lx = d.x; const ly = dy-220;
+                    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(lx-4, ly, 8, 220);
+                    ctx.fillStyle = '#fef08a'; ctx.beginPath(); ctx.arc(lx, ly, 12, 0, Math.PI*2); ctx.fill();
+                }
+            });
+
+            if (goalItem) {
+                const gy = getGroundY(goalItem.x);
+                ctx.save(); ctx.translate(goalItem.x, gy);
+                if (goalItem.type === 'STATION') {
+                    ctx.fillStyle = '#cbd5e1'; ctx.fillRect(0, -180, goalItem.w, 180);
+                    ctx.fillStyle = 'white'; ctx.fillRect(50, -170, goalItem.w-100, 40);
+                    ctx.fillStyle = '#1d4ed8'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center';
+                    ctx.fillText('興戸駅', goalItem.w/2, -142);
+                    ctx.fillStyle = '#475569'; ctx.fillRect(10, -180, 15, 180); ctx.fillRect(goalItem.w-25, -180, 15, 180);
+                } else {
+                    ctx.fillStyle = '#7f1d1d'; ctx.fillRect(0, -220, goalItem.w, 220);
+                    ctx.fillStyle = '#fef3c7'; ctx.font = 'bold 28px serif'; ctx.textAlign = 'center';
+                    ctx.fillText('同志社大学', goalItem.w/2, -110);
+                    ctx.strokeStyle = '#fef3c7'; ctx.lineWidth = 4; ctx.strokeRect(10, -210, goalItem.w-20, 200);
+                }
+                ctx.restore();
+            }
+
+            coins.forEach(c => {
+                const drawY = getGroundY(c.x) + c.relY;
+                drawCoin(c.x + c.w/2, drawY + c.h/2, c.w, c.type);
+            });
+
+            particles.forEach(p => {
+                ctx.fillStyle = p.color; ctx.globalAlpha = p.life / 15; ctx.fillRect(p.x, p.y, 4, 4);
+            });
+            ctx.globalAlpha = 1.0;
+
+            enemies.forEach(e => {
+                ctx.save(); 
+                let ey;
+                if (e.type === 'BIRD') ey = getGroundY(e.x) - 180 + Math.sin(frameCount * 0.15 + e.ph) * 35;
+                else if (e.type === 'STUDENT') ey = getGroundY(e.x) - e.h + Math.abs(Math.sin(frameCount * 0.2 + e.ph)) * 10;
+                else ey = getGroundY(e.x) - e.h;
+                ctx.translate(e.x + e.w/2, ey + e.h/2);
+                if (e.type === 'BIRD') {
+                    ctx.fillStyle = '#1e293b'; const wing = Math.sin(frameCount * 0.4 + e.ph) * 15;
+                    ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(0, wing); ctx.lineTo(20, 0); ctx.lineTo(0, -wing); ctx.fill();
+                } else if (e.type === 'STUDENT') {
+                    ctx.fillStyle = '#3b82f6'; ctx.fillRect(-15, -20, 30, 40);
+                    ctx.fillStyle = '#fca5a5'; ctx.beginPath(); ctx.arc(0, -35, 12, 0, Math.PI*2); ctx.fill();
+                } else if (e.type === 'TRASH') {
+                    ctx.rotate(e.rot); ctx.fillStyle = '#94a3b8'; ctx.fillRect(-e.w/2, -e.h/2, e.w, e.h);
+                } else {
+                    ctx.fillStyle = '#f97316'; ctx.beginPath(); ctx.moveTo(-e.w/2, e.h/2); ctx.lineTo(0, -e.h/2); ctx.lineTo(e.w/2, e.h/2); ctx.fill();
+                    ctx.fillStyle = 'white'; ctx.fillRect(-e.w/2 + 8, e.h/4 - 2, e.w - 16, 4); ctx.fillRect(-e.w/2 + 4, e.h/2 - 10, e.w - 8, 4);
+                }
+                ctx.restore();
+            });
+
+            // Player
+            ctx.save();
+            const py = player.y + player.height/2 + (player.vy === 0 ? player.bobbing : 0);
+            ctx.translate(player.x + player.width/2, py);
+            ctx.scale(1/player.scaleY, player.scaleY);
+            ctx.scale(-1, 1);
+            if (player.img) { ctx.drawImage(player.img, -player.width/2, -player.height/2 - 10, player.width, player.height); }
+            else { ctx.strokeStyle = 'white'; ctx.lineWidth = 3; ctx.strokeRect(-player.width/2, -player.height/2, player.width, player.height); }
+            ctx.restore();
+            ctx.restore(); 
+
+            // Result UI
+            if (gameState === 'GAMEOVER' || gameState === 'CLEARING') {
+                const alpha = Math.min(resultTimer / 30, 0.85);
+                ctx.fillStyle = `rgba(15, 23, 42, ${alpha})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                const centerX = canvas.width / 2;
+                const isWin = gameState === 'CLEARING';
+
+                const titleScale = Math.max(1, 1.5 - resultTimer / 20);
+                ctx.save();
+                ctx.translate(centerX, canvas.height * 0.15); 
+                if (resultTimer < 20) ctx.scale(titleScale, titleScale);
+                ctx.shadowBlur = 15; ctx.shadowColor = isWin ? '#4ade80' : '#ef4444';
+                ctx.fillStyle = isWin ? '#4ade80' : '#ef4444';
+                ctx.textAlign = 'center'; ctx.font = 'bold 36px sans-serif';
+                ctx.fillText(isWin ? '1限に間に合った！' : '1限に遅刻した...', 0, 0);
+                ctx.restore();
+
+                if (resultTimer > 20) {
+                    // スコア表示
+                    ctx.fillStyle = 'white';
+                    ctx.font = 'bold 24px monospace';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`TOTAL SCORE: ${isWin ? finalScore : Math.floor(score/10)}`, centerX, canvas.height * 0.28);
+                    
+                    // コイン表示を少し上に
+                    const coinRatio = totalCoinsSpawned > 0 ? totalCoinsCollected / totalCoinsSpawned : 0;
+                    ctx.font = '16px sans-serif';
+                    ctx.fillStyle = '#94a3b8';
+                    ctx.fillText(`COINS: ${totalCoinsCollected} / ${totalCoinsSpawned} (${Math.floor(coinRatio*100)}%)`, centerX, canvas.height * 0.35);
+
+                    if (resultTimer > 40 && isWin) {
+                        const rankAlpha = Math.min((resultTimer - 40) / 20, 1);
+                        const rankPop = Math.max(1, 2.0 - (resultTimer - 40) / 10);
+                        let rank = coinRatio > 0.85 ? 'S' : coinRatio > 0.6 ? 'A' : coinRatio > 0.3 ? 'B' : 'C';
+                        let rankColor = rank === 'S' ? '#fbbf24' : rank === 'A' ? '#f87171' : '#60a5fa';
+
+                        ctx.save();
+                        // ランク表示全体の中心を少し下げることで上のテキストとの重なりを回避
+                        ctx.translate(centerX, canvas.height * 0.72); 
+                        if (resultTimer < 55) ctx.scale(rankPop, rankPop);
+                        ctx.globalAlpha = rankAlpha;
+                        
+                        // "RANK"ラベルを文字と被らない位置に固定
+                        ctx.font = 'bold 28px sans-serif';
+                        ctx.shadowBlur = 0;
+                        ctx.fillStyle = 'white';
+                        ctx.fillText('RANK', 0, -145); 
+
+                        // アルファベット表示
+                        ctx.shadowBlur = 40;
+                        ctx.shadowColor = rankColor;
+                        ctx.fillStyle = rankColor;
+                        ctx.font = '900 180px sans-serif'; 
+                        ctx.textAlign = 'center';
+                        ctx.fillText(rank, 0, 10); // 微調整
+                        ctx.restore();
+                    }
+
+                    if (resultTimer > 60) {
+                        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                        ctx.font = 'bold 18px sans-serif';
+                        ctx.fillText(isWin ? 'タップしてもう一度登校する' : 'タップしてリベンジ！', centerX, canvas.height * 0.94);
+                    }
+                }
+            }
+        }
+
+        function loop() { update(); draw(); requestAnimationFrame(loop); }
+        loop();
+    </script>
+</body>
+</html>
